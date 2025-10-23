@@ -1,17 +1,17 @@
 import streamlit as st
-import pygame
+from pydub import AudioSegment
+from pydub.playback import _play_with_simpleaudio
 import time
 import threading
 import tempfile
-import base64
 
 # ===== ページ設定 =====
 st.set_page_config(
-    page_title="✨フェード付きBGM＆効果音コントローラー🎶",
+    page_title="🌸 フェード付きBGM＆効果音コントローラー 🎶",
     layout="centered"
 )
 
-# ===== 背景CSS（リーナ・ベルカラー🎀） =====
+# ===== ディズニー風スタイル =====
 page_bg = """
 <style>
 [data-testid="stAppViewContainer"] {
@@ -40,76 +40,82 @@ st.markdown(page_bg, unsafe_allow_html=True)
 # ===== タイトル =====
 st.title("🌸 フェード付きBGM & 効果音コントローラー 🎶")
 
-# ===== pygame 初期化 =====
-pygame.mixer.init()
-
 # ===== セッション変数 =====
-if "bgm" not in st.session_state:
-    st.session_state.bgm = None
-if "se" not in st.session_state:
-    st.session_state.se = None
+if "bg_audio" not in st.session_state:
+    st.session_state.bg_audio = None
+if "bg_play_obj" not in st.session_state:
+    st.session_state.bg_play_obj = None
 if "status" not in st.session_state:
     st.session_state.status = "待機中"
 
 # ===== ファイルアップロード =====
-st.session_state.bgm = st.file_uploader("🎧 BGMファイルを選んでね", type=["mp3", "wav"])
-st.session_state.se = st.file_uploader("🔔 効果音ファイルを選んでね", type=["mp3", "wav"])
+bg_file = st.file_uploader("🎧 BGMファイルを選んでね", type=["mp3", "wav"])
+se_file = st.file_uploader("🔔 効果音ファイルを選んでね", type=["mp3", "wav"])
 
 # ===== パラメータ =====
-fade_time = st.slider("🌈 フェード時間（ミリ秒）", 500, 5000, 2000, 100)
-wait_time = st.slider("⏳ 効果音後の待機時間（ミリ秒）", 0, 5000, 2000, 100)
+fade_time = st.slider("🌈 フェード時間（秒）", 0.5, 5.0, 2.0, 0.1)
+wait_time = st.slider("⏳ 効果音後の待機時間（秒）", 0.0, 5.0, 2.0, 0.1)
 
-# ===== BGM 再生関数 =====
+# ===== 関数 =====
 def play_bgm():
-    if not st.session_state.bgm:
+    if not bg_file:
         st.warning("BGMファイルを選んでね！")
         return
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(st.session_state.bgm.read())
-        tmp_path = tmp.name
-    pygame.mixer.music.load(tmp_path)
-    pygame.mixer.music.play(-1)
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp.write(bg_file.read())
+    tmp.close()
+    st.session_state.bg_audio = AudioSegment.from_file(tmp.name)
+    st.session_state.bg_thread = threading.Thread(target=loop_bgm)
+    st.session_state.bg_thread.start()
     st.session_state.status = "BGM再生中 🎵"
 
-# ===== 効果音再生関数 =====
-def play_se():
-    if not st.session_state.se:
+def loop_bgm():
+    while True:
+        if st.session_state.bg_audio is None:
+            break
+        st.session_state.bg_play_obj = _play_with_simpleaudio(st.session_state.bg_audio)
+        st.session_state.bg_play_obj.wait_done()
+
+def stop_bgm():
+    if st.session_state.bg_play_obj:
+        st.session_state.bg_play_obj.stop()
+    st.session_state.bg_audio = None
+    st.session_state.status = "停止中 💤"
+
+def play_effect():
+    if not se_file:
         st.warning("効果音ファイルを選んでね！")
         return
-    threading.Thread(target=_play_se_thread).start()
+    threading.Thread(target=_play_effect_thread).start()
 
-def _play_se_thread():
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(st.session_state.se.read())
-        se_path = tmp.name
+def _play_effect_thread():
+    st.session_state.status = "フェードアウト中..."
+    if st.session_state.bg_audio and st.session_state.bg_play_obj:
+        fade_out_audio = st.session_state.bg_audio.fade_out(int(fade_time * 1000))
+        st.session_state.bg_play_obj.stop()
+        _play_with_simpleaudio(fade_out_audio)
+        time.sleep(fade_time)
 
-    if pygame.mixer.music.get_busy():
-        st.session_state.status = "BGMフェードアウト中..."
-        pygame.mixer.music.fadeout(fade_time)
-        time.sleep(fade_time / 1000.0)
-
+    time.sleep(wait_time)  # 待機してから効果音再生
     st.session_state.status = "効果音再生中 🔊"
-    se = pygame.mixer.Sound(se_path)
-    se.play()
-    while se.get_num_channels() > 0:
-        time.sleep(0.1)
 
-    st.session_state.status = "待機中..."
-    time.sleep(wait_time / 1000.0)
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp.write(se_file.read())
+    tmp.close()
+    se_audio = AudioSegment.from_file(tmp.name)
+    se_play_obj = _play_with_simpleaudio(se_audio)
+    se_play_obj.wait_done()
 
-    if st.session_state.bgm:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp2:
-            tmp2.write(st.session_state.bgm.read())
-            bgm_path = tmp2.name
-        pygame.mixer.music.load(bgm_path)
-        pygame.mixer.music.play(-1, fade_ms=fade_time)
+    st.session_state.status = "効果音終了、待機中..."
+    time.sleep(wait_time)
+
+    # BGMフェードイン再開
+    if st.session_state.bg_audio:
         st.session_state.status = "BGMフェードイン中 🌸"
+        fade_in_audio = st.session_state.bg_audio.fade_in(int(fade_time * 1000))
+        st.session_state.bg_play_obj = _play_with_simpleaudio(fade_in_audio)
 
-# ===== 停止関数 =====
-def stop_all():
-    pygame.mixer.music.stop()
-    pygame.mixer.stop()
-    st.session_state.status = "停止中 💤"
+    st.session_state.status = "準備完了"
 
 # ===== ボタン配置 =====
 col1, col2, col3 = st.columns(3)
@@ -118,10 +124,10 @@ with col1:
         play_bgm()
 with col2:
     if st.button("🔔 効果音再生", type="primary"):
-        play_se()
+        play_effect()
 with col3:
     if st.button("⏹ 停止", type="primary"):
-        stop_all()
+        stop_bgm()
 
 # ===== ステータス表示 =====
 st.markdown(f"### 📡 現在の状態：**{st.session_state.status}**")
